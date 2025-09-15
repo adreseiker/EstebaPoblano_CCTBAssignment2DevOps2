@@ -1,0 +1,13 @@
+{
+  "name": "cctb-assignment2-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Simple site + Selenium tests for Assignment #2",
+  "scripts": {
+    "test:e2e": "node selenium-tests/test_form.js && node selenium-tests/test_validation.js"
+  },
+  "dependencies": {
+    "chromedriver": "^129.0.0",
+    "selenium-webdriver": "^4.23.0"
+  }
+}
