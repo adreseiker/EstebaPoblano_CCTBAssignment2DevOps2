@@ -37,32 +37,25 @@ pipeline {
     }
 
     stage('Deploy to Testing') {
-      steps {
-        sshagent([env.SSH_CREDS]) {
-          sh """
-            set -euo pipefail
-            REMOTE="${SSH_USER}@${TESTING_SERVER}"
-
-            # Asegurar docroot y permisos para copiar
-            ssh ${SSH_OPTS} "$REMOTE" 'sudo mkdir -p /var/www/html && sudo chown -R ${SSH_USER}: /var/www/html'
-
-            # Instalar rsync si falta (Amazon Linux/RHEL o Debian/Ubuntu)
-            ssh ${SSH_OPTS} "$REMOTE" 'command -v rsync >/dev/null 2>&1 || ( (command -v yum >/dev/null 2>&1 && sudo yum -y install rsync) || (command -v apt-get >/dev/null 2>&1 && sudo apt-get update -y && sudo apt-get install -y rsync) )'
-
-            # Sincronizar desde el workspace a /var/www/html (limpia archivos obsoletos)
-            rsync -az --delete -e "ssh ${SSH_OPTS}" \
-              --exclude ".git" --exclude "node_modules" \
-              ./ "$REMOTE":/var/www/html/
-
-            # Devolver propiedad al usuario del servidor web (apache o www-data)
-            ssh ${SSH_OPTS} "$REMOTE" '(id apache >/dev/null 2>&1 && sudo chown -R apache:apache /var/www/html) || (id www-data >/dev/null 2>&1 && sudo chown -R www-data:www-data /var/www/html) || true'
-
-            # SELinux (si aplica)
-            ssh ${SSH_OPTS} "$REMOTE" 'sudo restorecon -R /var/www/html 2>/dev/null || true'
-          """
-        }
-      }
+  steps {
+    sshagent(['ec2-user']) {
+      sh '''
+        set -euo pipefail
+        ssh -o StrictHostKeyChecking=no ec2-user@13.220.188.19 '
+          sudo mkdir -p /var/www/html
+          sudo chown -R ec2-user:ec2-user /var/www/html
+          which rsync || sudo yum -y install rsync || sudo apt-get update && sudo apt-get install -y rsync
+        '
+        rsync -az --delete -e "ssh -o StrictHostKeyChecking=no" \
+          --exclude ".git" --exclude "node_modules" ./ ec2-user@13.220.188.19:/var/www/html/
+        ssh -o StrictHostKeyChecking=no ec2-user@13.220.188.19 \
+          '(id apache >/dev/null 2>&1 && sudo chown -R apache:apache /var/www/html) \
+            || (id www-data >/dev/null 2>&1 && sudo chown -R www-data:www-data /var/www/html)'
+      '''
     }
+  }
+}
+
 
     stage('Install E2E deps') {
       steps {
@@ -130,4 +123,5 @@ pipeline {
     failure  { echo '❌ Pipeline FAILED' }
   }
 }
+
 
