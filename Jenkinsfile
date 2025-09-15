@@ -42,19 +42,21 @@ pipeline {
       sh '''
         set -euo pipefail
         ssh -o StrictHostKeyChecking=no ec2-user@13.220.188.19 '
-          sudo mkdir -p /var/www/html
+          # 1) carpeta limpia
+          sudo rm -rf /var/www/html && sudo mkdir -p /var/www/html
+          # 2) dar permisos a ec2-user para clonar
           sudo chown -R ec2-user:ec2-user /var/www/html
-          which rsync || sudo yum -y install rsync || sudo apt-get update && sudo apt-get install -y rsync
+          # 3) clonar
+          git clone https://github.com/adreseiker/EstebaPoblano_CCTBAssignment2DevOps2.git /var/www/html
+          # 4) devolver propiedad al servidor web
+          (id apache >/dev/null 2>&1 && sudo chown -R apache:apache /var/www/html) \
+            || (id www-data >/dev/null 2>&1 && sudo chown -R www-data:www-data /var/www/html)
         '
-        rsync -az --delete -e "ssh -o StrictHostKeyChecking=no" \
-          --exclude ".git" --exclude "node_modules" ./ ec2-user@13.220.188.19:/var/www/html/
-        ssh -o StrictHostKeyChecking=no ec2-user@13.220.188.19 \
-          '(id apache >/dev/null 2>&1 && sudo chown -R apache:apache /var/www/html) \
-            || (id www-data >/dev/null 2>&1 && sudo chown -R www-data:www-data /var/www/html)'
       '''
     }
   }
 }
+
 
 
     stage('Install E2E deps') {
@@ -123,5 +125,6 @@ pipeline {
     failure  { echo '❌ Pipeline FAILED' }
   }
 }
+
 
 
