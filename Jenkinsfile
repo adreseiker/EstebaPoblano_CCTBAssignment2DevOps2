@@ -3,7 +3,7 @@ pipeline {
 
   environment {
     REPO_URL          = 'https://github.com/adreseiker/EstebaPoblano_CCTBAssignment2DevOps2.git'
-    SSH_CREDS         = 'ssh-key-id'   // ID real de tu credencial
+    SSH_CREDS         = 'ssh-key-id'    // ID real de tu credencial
     SSH_USER          = 'ec2-user'
 
     TESTING_SERVER    = '13.220.188.19'
@@ -32,16 +32,15 @@ pipeline {
         sshagent(credentials: [env.SSH_CREDS]) {
           sh """
             set -euo pipefail
-            # Conectar y desplegar en TESTING sin usar \$REMOTE
             ssh ${SSH_OPTS} ${SSH_USER}@${TESTING_SERVER} '
               set -euo pipefail
               # 1) carpeta limpia
               sudo rm -rf /var/www/html && sudo mkdir -p /var/www/html
-              # 2) dar permisos a ec2-user para clonar
+              # 2) permisos para clonar
               sudo chown -R ec2-user:ec2-user /var/www/html
-              # 3) clonar (git ya instalado)
+              # 3) clonar
               git clone ${REPO_URL} /var/www/html
-              # 4) devolver propiedad al servidor web
+              # 4) devolver propiedad al webserver
               (id apache >/dev/null 2>&1 && sudo chown -R apache:apache /var/www/html) \
                 || (id www-data >/dev/null 2>&1 && sudo chown -R www-data:www-data /var/www/html) || true
               sudo restorecon -R /var/www/html 2>/dev/null || true
@@ -53,8 +52,23 @@ pipeline {
 
     stage('Install E2E deps') {
       steps {
-        sh 'node -v && npm -v'
-        sh 'npm ci || npm install'
+        sh '''
+          set -euo pipefail
+          node -v && npm -v
+          # Si hay package-lock usarlo; si no, instala normal
+          npm ci || npm install
+
+          # === Sincronizar ChromeDriver con Chrome instalado ===
+          # Obtén la versión mayor de Google Chrome (p.ej. 140)
+          CHROME_MAJOR=$(google-chrome --version | awk '{print $3}' | cut -d. -f1)
+          echo "Detected Google Chrome major version: ${CHROME_MAJOR}"
+
+          # Instala exactamente ese chromedriver (local en node_modules)
+          npm install -D chromedriver@${CHROME_MAJOR} --no-audit --no-fund
+
+          # Mostrar versión para debug
+          npx chromedriver --version || true
+        '''
       }
     }
 
@@ -63,14 +77,14 @@ pipeline {
         script {
           writeFile file: env.TEST_RESULT_FILE, text: 'false'
           withEnv(["TESTING_URL=${env.TESTING_URL}"]) {
-            try {
-              sh 'npm run --silent test:e2e'
-              writeFile file: env.TEST_RESULT_FILE, text: 'true'
-              echo 'E2E passed'
-            } catch (e) {
-              currentBuild.result = 'UNSTABLE'
-              echo "E2E failed: ${e}"
-            }
+            sh '''
+              set -euo pipefail
+              # Asegurar que el chromedriver local esté primero en PATH
+              export PATH="$PWD/node_modules/.bin:$PATH"
+              npm run --silent test:e2e
+            '''
+            writeFile file: env.TEST_RESULT_FILE, text: 'true'
+            echo 'E2E passed'
           }
         }
       }
@@ -82,15 +96,13 @@ pipeline {
         sshagent(credentials: [env.SSH_CREDS]) {
           sh """
             set -euo pipefail
-            # Preparar docroot en PROD
+            # Prepara docroot en PROD y sincroniza desde el workspace
             ssh ${SSH_OPTS} ${SSH_USER}@${PRODUCTION_SERVER} 'sudo mkdir -p /var/www/html && sudo chown -R ec2-user: /var/www/html'
 
-            # rsync desde el workspace (sin usar \$REMOTE)
             rsync -az --delete -e "ssh ${SSH_OPTS}" \
               --exclude ".git" --exclude "node_modules" \
               ./ ${SSH_USER}@${PRODUCTION_SERVER}:/var/www/html/
 
-            # Propiedad para el servidor web y SELinux si aplica
             ssh ${SSH_OPTS} ${SSH_USER}@${PRODUCTION_SERVER} '(id apache >/dev/null 2>&1 && sudo chown -R apache:apache /var/www/html) || (id www-data >/dev/null 2>&1 && sudo chown -R www-data:www-data /var/www/html) || true'
             ssh ${SSH_OPTS} ${SSH_USER}@${PRODUCTION_SERVER} 'sudo restorecon -R /var/www/html 2>/dev/null || true'
           """
@@ -111,4 +123,6 @@ pipeline {
     failure  { echo '❌ Pipeline FAILED' }
   }
 }
+
+
 
