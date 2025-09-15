@@ -5,9 +5,8 @@ pipeline {
     // === TU REPO (por si lo necesitas en el futuro) ===
     REPO_URL          = 'https://github.com/adreseiker/EstebaPoblano_CCTBAssignment2DevOps2.git'
 
-    // === CREDENCIAL SSH EN JENKINS (ID) ===
-    // Usa el ID real de tu credencial. Según tus logs es "ec2-user".
-    SSH_CREDS         = 'ec2-user'
+    // === CREDENCIAL SSH EN JENKINS (ID real) ===
+    SSH_CREDS         = 'ssh-key-id'
     SSH_USER          = 'ec2-user'
 
     // === TUS IPs ===
@@ -37,27 +36,29 @@ pipeline {
     }
 
     stage('Deploy to Testing') {
-  steps {
-    sshagent(['ec2-user']) {
-      sh '''
-        set -euo pipefail
-        ssh -o StrictHostKeyChecking=no ec2-user@13.220.188.19 '
-          # 1) carpeta limpia
-          sudo rm -rf /var/www/html && sudo mkdir -p /var/www/html
-          # 2) dar permisos a ec2-user para clonar
-          sudo chown -R ec2-user:ec2-user /var/www/html
-          # 3) clonar
-          git clone https://github.com/adreseiker/EstebaPoblano_CCTBAssignment2DevOps2.git /var/www/html
-          # 4) devolver propiedad al servidor web
-          (id apache >/dev/null 2>&1 && sudo chown -R apache:apache /var/www/html) \
-            || (id www-data >/dev/null 2>&1 && sudo chown -R www-data:www-data /var/www/html)
-        '
-      '''
+      steps {
+        sshagent(credentials: [env.SSH_CREDS]) {
+          sh """
+            set -euo pipefail
+            REMOTE="${SSH_USER}@${TESTING_SERVER}"
+            ssh ${SSH_OPTS} "$REMOTE" '
+              set -euo pipefail
+              # 1) carpeta limpia
+              sudo rm -rf /var/www/html && sudo mkdir -p /var/www/html
+              # 2) dar permisos a ${SSH_USER} para clonar
+              sudo chown -R ${SSH_USER}:${SSH_USER} /var/www/html
+              # 3) clonar
+              git clone ${REPO_URL} /var/www/html
+              # 4) devolver propiedad al servidor web
+              (id apache >/dev/null 2>&1 && sudo chown -R apache:apache /var/www/html) \
+                || (id www-data >/dev/null 2>&1 && sudo chown -R www-data:www-data /var/www/html) || true
+              # SELinux (si aplica)
+              sudo restorecon -R /var/www/html 2>/dev/null || true
+            '
+          """
+        }
+      }
     }
-  }
-}
-
-
 
     stage('Install E2E deps') {
       steps {
@@ -89,7 +90,7 @@ pipeline {
         expression { fileExists(env.TEST_RESULT_FILE) && readFile(env.TEST_RESULT_FILE).trim() == 'true' }
       }
       steps {
-        sshagent([env.SSH_CREDS]) {
+        sshagent(credentials: [env.SSH_CREDS]) {
           sh """
             set -euo pipefail
             REMOTE="${SSH_USER}@${PRODUCTION_SERVER}"
@@ -125,6 +126,5 @@ pipeline {
     failure  { echo '❌ Pipeline FAILED' }
   }
 }
-
 
 
