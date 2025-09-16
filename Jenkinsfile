@@ -54,9 +54,60 @@ pipeline {
           npm ci || npm install
           CHROME_MAJOR=$(google-chrome --version | awk '{print $3}' | cut -d. -f1)
           echo "Detected Google Chrome major version: ${CHROME_MAJOR}"
-          n
+          npm install -D chromedriver@${CHROME_MAJOR} --no-audit --no-fund
+          npx chromedriver --version || true
+        '''
+      }
+    }
 
+    stage('Run Selenium Tests') {
+      steps {
+        script {
+          writeFile file: env.TEST_RESULT_FILE, text: 'false'
+          withEnv(["TESTING_URL=${env.TESTING_URL}"]) {
+            sh '''
+              set -euo pipefail
+              export PATH="$PWD/node_modules/.bin:$PATH"
+              npm run --silent test:e2e
+            '''
+            writeFile file: env.TEST_RESULT_FILE, text: 'true'
+            echo 'E2E passed'
+          }
+        }
+      }
+    }
 
+    stage('Deploy to Production') {
+      when { expression { fileExists(env.TEST_RESULT_FILE) && readFile(env.TEST_RESULT_FILE).trim() == 'true' } }
+      steps {
+        sshagent(credentials: [env.SSH_CREDS]) {
+          sh """
+            set -euo pipefail
+            ssh ${SSH_OPTS} ${SSH_USER}@${PRODUCTION_SERVER} 'sudo mkdir -p /var/www/html && sudo chown -R ec2-user: /var/www/html'
 
+            rsync -az --delete -e "ssh ${SSH_OPTS}" \
+              --exclude ".git" --exclude "node_modules" \
+              ./ ${SSH_USER}@${PRODUCTION_SERVER}:/var/www/html/
+
+            ssh ${SSH_OPTS} ${SSH_USER}@${PRODUCTION_SERVER} '(id apache >/dev/null 2>&1 && sudo chown -R apache:apache /var/www/html) || (id www-data >/dev/null 2>&1 && sudo chown -R www-data:www-data /var/www/html) || true'
+            ssh ${SSH_OPTS} ${SSH_USER}@${PRODUCTION_SERVER} 'sudo restorecon -R /var/www/html 2>/dev/null || true'
+          """
+        }
+      }
+    }
+
+    stage('Smoke on Production') {
+      when { expression { fileExists(env.TEST_RESULT_FILE) && readFile(env.TEST_RESULT_FILE).trim() == 'true' } }
+      steps { sh "curl -f http://${env.PRODUCTION_SERVER}/ -I | head -n1" }
+    }
+  }
+
+  post {
+    always   { archiveArtifacts artifacts: "${env.TEST_RESULT_FILE}", fingerprint: true }
+    success  { echo '✅ Pipeline OK' }
+    unstable { echo '⚠️ E2E falló: no se desplegó a Prod' }
+    failure  { echo '❌ Pipeline FAILED' }
+  }
+}
 
 
